@@ -2,6 +2,8 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import worldGeoJSON from '../assets/world.json';
+import locationsData from '../assets/locations.json';
 
 // 定义地点信息接口
 interface LocationInfo {
@@ -12,9 +14,38 @@ interface LocationInfo {
   additionalInfo?: string;
 }
 
+// 国家信息接口
+interface CountryInfo {
+  name: string;
+  iso_a2: string;
+  iso_a3: string;
+  iso_n3: string;
+}
+
+// GeoJSON类型定义
+interface GeoJSONFeature {
+  type: string;
+  properties: {
+    name: string;
+    iso_a2: string;
+    iso_a3: string;
+    iso_n3: string;
+  };
+  geometry: {
+    type: string;
+    coordinates: number[][][] | number[][][][];
+  };
+}
+
+interface GeoJSON {
+  type: string;
+  features: GeoJSONFeature[];
+}
+
 // 组件属性
 const props = defineProps<{
   showLocations?: boolean;
+  showCountries?: boolean;
 }>();
 
 // 响应式状态
@@ -24,6 +55,7 @@ const tooltipVisible = ref(false);
 const tooltipContent = ref('');
 const tooltipPosition = ref({ x: 0, y: 0 });
 const showLocations = ref(props.showLocations || false);
+const showCountries = ref(props.showCountries || false);
 
 // 场景相关变量
 let scene: THREE.Scene;
@@ -34,16 +66,12 @@ let controls: OrbitControls;
 let raycaster: THREE.Raycaster;
 let mouse: THREE.Vector2;
 let locationMarkers: THREE.Group;
+let countryMeshes: THREE.Mesh[] = [];
+let hoveredCountry: THREE.Mesh | null = null;
 let animationFrameId: number;
 
-// 地点数据
-const locations = ref<LocationInfo[]>([
-  { name: '北京', latitude: 39.9042, longitude: 116.4074, population: 21.54, additionalInfo: '中国首都' },
-  { name: '纽约', latitude: 40.7128, longitude: -74.0060, population: 8.38, additionalInfo: '美国最大城市' },
-  { name: '东京', latitude: 35.6762, longitude: 139.6503, population: 13.96, additionalInfo: '日本首都' },
-  { name: '伦敦', latitude: 51.5074, longitude: -0.1278, population: 8.98, additionalInfo: '英国首都' },
-  { name: '悉尼', latitude: -33.8688, longitude: 151.2093, population: 5.23, additionalInfo: '澳大利亚最大城市' },
-]);
+// 地点数据 - 从JSON文件加载
+const locations = ref<LocationInfo[]>(locationsData as LocationInfo[]);
 
 // 初始化Three.js场景
 const initThree = () => {
@@ -82,6 +110,11 @@ const initThree = () => {
     createLocationMarkers();
   }
   
+  // 创建国家边界
+  if (showCountries.value) {
+    createCountries();
+  }
+  
   // 添加轨道控制
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -105,17 +138,20 @@ const initThree = () => {
 // 创建地球
 const createEarth = () => {
   const textureLoader = new THREE.TextureLoader();
+  const texturePath = '/textures/';
   
   // 加载纹理
-  const earthTexture = textureLoader.load('/textures/earth_daymap.jpg');
-  const bumpMap = textureLoader.load('/textures/earth_bumpmap.jpg');
-  const specularMap = textureLoader.load('/textures/earth_specular.jpg');
-  const cloudsTexture = textureLoader.load('/textures/earth_clouds.png');
+  const earthTexture = textureLoader.load(texturePath + 'earth_daymap.jpg');
+  const bumpMap = textureLoader.load(texturePath + 'earth_bumpmap.jpg');
+  const specularMap = textureLoader.load(texturePath + 'earth_specular.jpg');
+  const cloudsTexture = textureLoader.load(texturePath + 'earth_clouds.png');
   
-  // 添加错误处理
-  textureLoader.manager.onError = function(url) {
-    console.error('加载纹理失败:', url);
-  };
+  // 加载完成后设置各向异性
+  const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+  earthTexture.anisotropy = maxAnisotropy;
+  bumpMap.anisotropy = maxAnisotropy;
+  specularMap.anisotropy = maxAnisotropy;
+  cloudsTexture.anisotropy = maxAnisotropy;
   
   // 创建地球几何体和材质
   const earthGeometry = new THREE.SphereGeometry(2, 64, 64);
@@ -130,6 +166,7 @@ const createEarth = () => {
   
   // 创建地球网格
   earth = new THREE.Mesh(earthGeometry, earthMaterial);
+  earth.renderOrder = 0;
   scene.add(earth);
   
   // 创建云层
@@ -138,9 +175,11 @@ const createEarth = () => {
     map: cloudsTexture,
     transparent: true,
     opacity: 0.4,
+    depthWrite: false
   });
   
   const clouds = new THREE.Mesh(cloudsGeometry, cloudsMaterial);
+  clouds.renderOrder = 1;
   scene.add(clouds);
   
   // 添加星空背景
@@ -196,13 +235,195 @@ const createLocationMarkers = () => {
 // 将经纬度转换为3D向量
 const latLongToVector3 = (latitude: number, longitude: number, radius: number): THREE.Vector3 => {
   const phi = (90 - latitude) * (Math.PI / 180);
-  const theta = (longitude + 180) * (Math.PI / 180);
+  const theta = -longitude * (Math.PI / 180);
   
-  const x = -radius * Math.sin(phi) * Math.cos(theta);
+  const x = radius * Math.sin(phi) * Math.cos(theta);
   const y = radius * Math.cos(phi);
   const z = radius * Math.sin(phi) * Math.sin(theta);
   
   return new THREE.Vector3(x, y, z);
+};
+
+// 将3D坐标转换为经纬度
+const vector3ToLatLong = (point: THREE.Vector3): { latitude: number; longitude: number } => {
+  const radius = Math.sqrt(point.x * point.x + point.y * point.y + point.z * point.z);
+  const latitude = 90 - Math.acos(point.y / radius) * (180 / Math.PI);
+  const longitude = -Math.atan2(point.z, point.x) * (180 / Math.PI);
+  return { latitude, longitude };
+};
+
+// 判断点是否在经纬度多边形内部
+const isPointInPolygon = (lat: number, lon: number, polygon: number[][]): boolean => {
+  let inside = false;
+  
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [lon1, lat1] = polygon[j];
+    const [lon2, lat2] = polygon[i];
+    
+    const intersect = ((lat1 > lat) !== (lat2 > lat)) &&
+      (lon < (lon2 - lon1) * (lat - lat1) / (lat2 - lat1) + lon1);
+    
+    if (intersect) inside = !inside;
+  }
+  
+  return inside;
+};
+
+// 查找国家
+const findCountry = (latitude: number, longitude: number): CountryInfo | null => {
+  const geoJSON = worldGeoJSON as GeoJSON;
+  
+  for (const feature of geoJSON.features) {
+    const { name, iso_a2, iso_a3, iso_n3 } = feature.properties;
+    const geometry = feature.geometry;
+    
+    const coordinates = geometry.type === 'Polygon' 
+      ? [geometry.coordinates as number[][][]]
+      : geometry.coordinates as number[][][][];
+    
+    for (const polygon of coordinates) {
+      if (!polygon || polygon.length === 0) continue;
+      
+      const exterior = polygon[0];
+      if (!exterior || exterior.length < 3) continue;
+      
+      if (isPointInPolygon(latitude, longitude, exterior)) {
+        return { name, iso_a2, iso_a3, iso_n3 };
+      }
+    }
+  }
+  
+  return null;
+};
+
+// 创建球面三角形网格
+const createSphericalTriangles = (
+  vertices: THREE.Vector3[],
+  indices: number[],
+  radius: number
+): THREE.BufferGeometry => {
+  const geometry = new THREE.BufferGeometry();
+  
+  // 投影到球面
+  const sphericalVertices = vertices.map(v => {
+    const length = v.length();
+    return new THREE.Vector3(
+      (v.x / length) * radius,
+      (v.y / length) * radius,
+      (v.z / length) * radius
+    );
+  });
+  
+  geometry.setFromPoints(sphericalVertices);
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  
+  return geometry;
+};
+
+// 三角剖分简单实现（适用于凸多边形）
+const triangulatePolygon = (points: THREE.Vector3[]): number[] => {
+  const indices: number[] = [];
+  
+  if (points.length < 3) return indices;
+  
+  // 简单扇形三角剖分
+  for (let i = 1; i < points.length - 1; i++) {
+    indices.push(0, i, i + 1);
+  }
+  
+  return indices;
+};
+
+// 创建国家边界和交互网格
+const createCountries = () => {
+  console.log('createCountries executing...');
+  // 清除现有的国家组
+  const existingGroup = scene.getObjectByName('countryGroup');
+  if (existingGroup) {
+    scene.remove(existingGroup);
+  }
+  
+  countryMeshes.forEach(mesh => {
+    mesh.geometry.dispose();
+    (mesh.material as THREE.Material).dispose();
+  });
+  countryMeshes = [];
+  
+  const geoJSON = worldGeoJSON as GeoJSON;
+  const LINE_RADIUS = 2.02;
+  const MESH_RADIUS = 2.015;
+  
+  const countryGroup = new THREE.Group();
+  countryGroup.name = 'countryGroup';
+  
+  // 遍历所有国家
+  geoJSON.features.forEach((feature) => {
+    const { name, iso_a2, iso_a3, iso_n3 } = feature.properties;
+    const geometry = feature.geometry;
+    
+    const coordinates = geometry.type === 'Polygon' 
+      ? [geometry.coordinates as number[][][]]
+      : geometry.coordinates as number[][][][];
+    
+    coordinates.forEach((polygon) => {
+      if (!polygon || polygon.length === 0) return;
+      
+      const exterior = polygon[0];
+      if (!exterior || exterior.length < 3) return;
+      
+      // 创建边界线
+      const lineVertices: THREE.Vector3[] = exterior.map(coord => {
+        const [lon, lat] = coord;
+        return latLongToVector3(lat, lon, LINE_RADIUS);
+      });
+      lineVertices.push(lineVertices[0].clone());
+      
+      const lineGeometry = new THREE.BufferGeometry().setFromPoints(lineVertices);
+      const lineMaterial = new THREE.LineBasicMaterial({ 
+        color: 0x00ffff, 
+        opacity: 0.9
+      });
+      const line = new THREE.Line(lineGeometry, lineMaterial);
+      countryGroup.add(line);
+      
+      // 创建填充网格
+      if (exterior.length >= 3) {
+        const fillVertices: THREE.Vector3[] = exterior.map(coord => {
+          const [lon, lat] = coord;
+          return latLongToVector3(lat, lon, MESH_RADIUS);
+        });
+        
+        const fillIndices: number[] = [];
+        for (let i = 1; i < fillVertices.length - 1; i++) {
+          fillIndices.push(0, i, i + 1);
+        }
+        
+        const fillGeometry = new THREE.BufferGeometry().setFromPoints(fillVertices);
+        fillGeometry.setIndex(fillIndices);
+        fillGeometry.computeVertexNormals();
+        
+        const fillMaterial = new THREE.MeshBasicMaterial({
+          color: 0x0088ff,
+          transparent: true,
+          opacity: 0.2,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        });
+        
+        const fillMesh = new THREE.Mesh(fillGeometry, fillMaterial);
+        fillMesh.userData = { 
+          country: { name, iso_a2, iso_a3, iso_n3 },
+          isCountry: true 
+        };
+        
+        countryMeshes.push(fillMesh);
+        countryGroup.add(fillMesh);
+      }
+    });
+  });
+  
+  scene.add(countryGroup);
 };
 
 // 处理窗口大小变化
@@ -230,6 +451,52 @@ const onMouseMove = (event: MouseEvent) => {
   // 设置射线
   raycaster.setFromCamera(mouse, camera);
   
+  // 检测国家交叉（优先）
+  if (showCountries.value && countryMeshes.length > 0) {
+    // 先检测是否悬停在某个国家上
+    const intersects = raycaster.intersectObjects(countryMeshes, false);
+    
+    if (intersects.length > 0) {
+      const mesh = intersects[0].object as THREE.Mesh;
+      const userData = mesh.userData as { country: CountryInfo };
+      const country = userData.country;
+      
+      // 高亮效果
+      if (hoveredCountry !== mesh) {
+        // 恢复上一个
+        if (hoveredCountry) {
+          (hoveredCountry.material as THREE.MeshBasicMaterial).opacity = 0.15;
+        }
+        // 高亮新的
+        hoveredCountry = mesh;
+        (hoveredCountry.material as THREE.MeshBasicMaterial).opacity = 0.4;
+      }
+      
+      // 更新工具提示内容
+      tooltipContent.value = `
+        <strong>${country.name}</strong><br>
+        ISO A2: ${country.iso_a2}<br>
+        ISO A3: ${country.iso_a3}
+      `;
+      
+      // 更新工具提示位置
+      tooltipPosition.value = {
+        x: event.clientX,
+        y: event.clientY
+      };
+      
+      // 显示工具提示
+      tooltipVisible.value = true;
+      return;
+    } else {
+      // 清除高亮
+      if (hoveredCountry) {
+        (hoveredCountry.material as THREE.MeshBasicMaterial).opacity = 0.15;
+        hoveredCountry = null;
+      }
+    }
+  }
+  
   // 检测与地点标记的交叉
   if (showLocations.value && locationMarkers) {
     const intersects = raycaster.intersectObjects(locationMarkers.children, true);
@@ -255,9 +522,10 @@ const onMouseMove = (event: MouseEvent) => {
       // 显示工具提示
       tooltipVisible.value = true;
     } else {
-      // 隐藏工具提示
       tooltipVisible.value = false;
     }
+  } else {
+    tooltipVisible.value = false;
   }
 };
 
@@ -283,14 +551,11 @@ const addOrUpdateLocation = (location: LocationInfo) => {
   );
   
   if (index !== -1) {
-    // 更新现有地点
     locations.value[index] = { ...locations.value[index], ...location };
   } else {
-    // 添加新地点
     locations.value.push(location);
   }
   
-  // 重新创建标记
   if (showLocations.value && locationMarkers) {
     createLocationMarkers();
   }
@@ -303,7 +568,6 @@ const removeLocation = (locationName: string) => {
   if (index !== -1) {
     locations.value.splice(index, 1);
     
-    // 重新创建标记
     if (showLocations.value && locationMarkers) {
       createLocationMarkers();
     }
@@ -323,10 +587,42 @@ const toggleLocations = (show?: boolean) => {
   }
 };
 
-// 监听showLocations属性变化
+// 切换国家显示
+const toggleCountries = (show?: boolean) => {
+  console.log('toggleCountries called, show:', show);
+  showCountries.value = show !== undefined ? show : !showCountries.value;
+  console.log('showCountries.value:', showCountries.value);
+  
+  if (showCountries.value) {
+    createCountries();
+  } else {
+    // 清除旧的
+    countryMeshes.forEach(mesh => {
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    });
+    
+    // 移除国家组
+    const countryGroup = scene.getObjectByName('countryGroup');
+    if (countryGroup) {
+      scene.remove(countryGroup);
+    }
+    
+    countryMeshes = [];
+    hoveredCountry = null;
+  }
+};
+
+// 监听属性变化
 watch(() => props.showLocations, (newVal) => {
   if (newVal !== undefined) {
     toggleLocations(newVal);
+  }
+});
+
+watch(() => props.showCountries, (newVal) => {
+  if (newVal !== undefined) {
+    toggleCountries(newVal);
   }
 });
 
@@ -349,6 +645,12 @@ onUnmounted(() => {
   if (renderer) {
     renderer.domElement.removeEventListener('mousemove', onMouseMove);
   }
+  
+  // 清理国家网格
+  countryMeshes.forEach(mesh => {
+    mesh.geometry.dispose();
+    (mesh.material as THREE.Material).dispose();
+  });
 });
 
 // 暴露方法和属性
@@ -356,6 +658,7 @@ defineExpose({
   addOrUpdateLocation,
   removeLocation,
   toggleLocations,
+  toggleCountries,
   locations
 });
 </script>
@@ -386,13 +689,14 @@ defineExpose({
 
 .tooltip {
   position: fixed;
-  background-color: rgba(0, 0, 0, 0.7);
+  background-color: rgba(0, 0, 0, 0.8);
   color: white;
-  padding: 8px 12px;
-  border-radius: 4px;
+  padding: 10px 14px;
+  border-radius: 6px;
   font-size: 14px;
   pointer-events: none;
   z-index: 1000;
-  max-width: 200px;
+  max-width: 220px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 </style>

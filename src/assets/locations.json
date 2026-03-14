@@ -1,0 +1,7 @@
+[
+  { "name": "北京", "latitude": 39.9042, "longitude": 116.4074, "population": 21.54, "additionalInfo": "中国首都" },
+  { "name": "纽约", "latitude": 40.7128, "longitude": -74.006, "population": 8.38, "additionalInfo": "美国最大城市" },
+  { "name": "东京", "latitude": 35.6762, "longitude": 139.6503, "population": 13.96, "additionalInfo": "日本首都" },
+  { "name": "伦敦", "latitude": 51.5074, "longitude": -0.1278, "population": 8.98, "additionalInfo": "英国首都" },
+  { "name": "悉尼", "latitude": -33.8688, "longitude": 151.2093, "population": 5.23, "additionalInfo": "澳大利亚最大城市" }
+]

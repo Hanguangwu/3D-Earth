@@ -4,6 +4,7 @@ import Earth from './components/Earth.vue';
 
 // 控制是否显示地点标记
 const showLocations = ref(false);
+const showCountries = ref(false);
 
 // 地球组件引用
 const earthRef = ref();
@@ -11,6 +12,11 @@ const earthRef = ref();
 // 切换地点显示
 const toggleLocations = () => {
   showLocations.value = !showLocations.value;
+};
+
+// 切换国家显示
+const toggleCountries = () => {
+  showCountries.value = !showCountries.value;
 };
 
 // 添加新地点
@@ -50,13 +56,15 @@ const removeLocation = () => {
     <div class="earth-wrapper">
       <Earth 
         ref="earthRef"
-        :showLocations="showLocations" 
+        :showLocations="showLocations"
+        :showCountries="showCountries" 
       />
     </div>
     
     <div class="controls">
       <h1>3D 地球模型</h1>
       <div class="control-buttons">
+        <button @click="toggleCountries">{{ showCountries ? '隐藏国界' : '显示国界' }}</button>
         <button @click="toggleLocations">{{ showLocations ? '隐藏地点' : '显示地点' }}</button>
         <button @click="addLocation">添加地点</button>
         <button @click="removeLocation">删除地点</button>
@@ -68,6 +76,7 @@ const removeLocation = () => {
           <li>右键拖动: 平移视图</li>
           <li>滚轮: 缩放</li>
           <li>鼠标悬停在标记上: 显示地点信息</li>
+          <li>鼠标悬停在国家上: 显示国家信息</li>
         </ul>
       </div>
     </div>

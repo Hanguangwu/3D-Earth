@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import worldGeoJSON from '../assets/world.json';
 import locationsData from '../assets/locations.json';
 
@@ -242,97 +242,6 @@ const latLongToVector3 = (latitude: number, longitude: number, radius: number): 
   const z = radius * Math.sin(phi) * Math.sin(theta);
   
   return new THREE.Vector3(x, y, z);
-};
-
-// 将3D坐标转换为经纬度
-const vector3ToLatLong = (point: THREE.Vector3): { latitude: number; longitude: number } => {
-  const radius = Math.sqrt(point.x * point.x + point.y * point.y + point.z * point.z);
-  const latitude = 90 - Math.acos(point.y / radius) * (180 / Math.PI);
-  const longitude = -Math.atan2(point.z, point.x) * (180 / Math.PI);
-  return { latitude, longitude };
-};
-
-// 判断点是否在经纬度多边形内部
-const isPointInPolygon = (lat: number, lon: number, polygon: number[][]): boolean => {
-  let inside = false;
-  
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const [lon1, lat1] = polygon[j];
-    const [lon2, lat2] = polygon[i];
-    
-    const intersect = ((lat1 > lat) !== (lat2 > lat)) &&
-      (lon < (lon2 - lon1) * (lat - lat1) / (lat2 - lat1) + lon1);
-    
-    if (intersect) inside = !inside;
-  }
-  
-  return inside;
-};
-
-// 查找国家
-const findCountry = (latitude: number, longitude: number): CountryInfo | null => {
-  const geoJSON = worldGeoJSON as GeoJSON;
-  
-  for (const feature of geoJSON.features) {
-    const { name, iso_a2, iso_a3, iso_n3 } = feature.properties;
-    const geometry = feature.geometry;
-    
-    const coordinates = geometry.type === 'Polygon' 
-      ? [geometry.coordinates as number[][][]]
-      : geometry.coordinates as number[][][][];
-    
-    for (const polygon of coordinates) {
-      if (!polygon || polygon.length === 0) continue;
-      
-      const exterior = polygon[0];
-      if (!exterior || exterior.length < 3) continue;
-      
-      if (isPointInPolygon(latitude, longitude, exterior)) {
-        return { name, iso_a2, iso_a3, iso_n3 };
-      }
-    }
-  }
-  
-  return null;
-};
-
-// 创建球面三角形网格
-const createSphericalTriangles = (
-  vertices: THREE.Vector3[],
-  indices: number[],
-  radius: number
-): THREE.BufferGeometry => {
-  const geometry = new THREE.BufferGeometry();
-  
-  // 投影到球面
-  const sphericalVertices = vertices.map(v => {
-    const length = v.length();
-    return new THREE.Vector3(
-      (v.x / length) * radius,
-      (v.y / length) * radius,
-      (v.z / length) * radius
-    );
-  });
-  
-  geometry.setFromPoints(sphericalVertices);
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-  
-  return geometry;
-};
-
-// 三角剖分简单实现（适用于凸多边形）
-const triangulatePolygon = (points: THREE.Vector3[]): number[] => {
-  const indices: number[] = [];
-  
-  if (points.length < 3) return indices;
-  
-  // 简单扇形三角剖分
-  for (let i = 1; i < points.length - 1; i++) {
-    indices.push(0, i, i + 1);
-  }
-  
-  return indices;
 };
 
 // 创建国家边界和交互网格
